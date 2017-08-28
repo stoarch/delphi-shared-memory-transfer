@@ -1,5 +1,5 @@
 unit form_sharedMemoryServer;
-{$define DEBUG_CHUNKS}
+{..$define DEBUG_CHUNKS}
 interface
 
 uses
@@ -248,7 +248,7 @@ procedure TFileListener.Execute;
           ShowProgress( position );
           inc( position );
 
-          Log(Format('Chunk %0:d is received', [position] ));
+          Log(Format('Chunk %0:d of %1:d is received', [position, FMaxProgress + 1] ));
 
           data := MapViewOfFile(hSharedMemory, FILE_MAP_READ, 0, 0, SHARED_MEMORY_SIZE);
 
@@ -262,11 +262,11 @@ procedure TFileListener.Execute;
 
           SetLength(fileChunk.data, fileChunk.size);
 
-          Log(Format('Chunk size is %0:d', [fileChunk.size]));
-
           CopyMemory(PChar(fileChunk.data), Pointer(Integer(data) + 4), fileChunk.size);
 
   {$ifdef DEBUG_CHUNKS}
+          Log(Format('Chunk size is %0:d', [fileChunk.size]));
+
           SetLength(debugStr, 100);
           CopyMemory(PChar(debugStr), Pointer(fileChunk.data), 100 );
           Log('Chunk data: ' + debugStr + ' ...' );

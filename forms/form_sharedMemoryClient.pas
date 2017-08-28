@@ -24,6 +24,7 @@ type
     FFileName : string;
     procedure TransferFile;
     procedure Log(message: string);
+    procedure UpdateProgress;
   public
     { Public declarations }
     constructor Create(AOwner:TComponent);override;
@@ -147,7 +148,8 @@ end;
 
 procedure TSharedMemoryClientForm.TransferFile();
   const
-    WAIT_FOR_EVENT_TIMEOUT = 5000;
+    WAIT_FOR_EVENT_TIMEOUT = 3000;
+    WAIT_TIMES = 5;
 
   var
     data : pointer;
@@ -160,10 +162,19 @@ procedure TSharedMemoryClientForm.TransferFile();
     fileName : string;
     errorCode : integer;
     memSize : LongInt;
+    waitCount : integer;
+    position : integer;
+    maxChunks : integer;
 begin
   fileName := ExtractFileName(FFileName);
   //Transfer file name//
   WaitForSingleObject( hMutex, INFINITE );
+
+  ResetEvent( hEndFileEvent );
+  ResetEvent( hErrorEvent );
+  ResetEvent( hNextChunkEvent );
+  ResetEvent( hDataReceivedEvent );
+  ResetEvent( hNewFileEvent );
 
   Log('Transfer file begins...');
 
@@ -176,6 +187,14 @@ begin
   end;
 
   fileStream := TFileStream.Create( FFileName, fmOpenRead );
+
+  maxChunks := fileStream.Size div SHARED_MEMORY_SIZE + 1;
+  position := 0;
+
+  //todo: Extract this UI method
+  progressBarFileTransfer.Max := maxChunks;
+  progressBarFileTransfer.Position := position;
+  progressBarFileTransfer.Step := 1;
 
   Longint(data^) := fileStream.Size;
   Integer(Pointer(Integer(data) + 4)^) := Length(fileName);
@@ -198,8 +217,6 @@ begin
 
   memSize := SHARED_MEMORY_SIZE - 4;
 
-  progressBarFileTransfer.Max := Round(fileStream.Position/memSize) + 1;
-  progressBarFileTransfer.Position := 0;
 
   Log('Transferring chunks of file');
   //Transfer file chunk by chunk//
@@ -238,32 +255,56 @@ begin
 
     UnmapViewOfFile(data);
 
+    Log(Format('Chunk %0:d of %1:d sent...',[position + 1, maxChunks]));
     SetEvent( hNextChunkEvent );
 
-    waitStatus := WaitForSingleObject(hDataReceivedEvent, WAIT_FOR_EVENT_TIMEOUT);
-    if( waitStatus = WAIT_TIMEOUT )then
-    begin
-      Log('Unable to send chunk to server.');
-      ResetEvent( hNextChunkEvent );
-      SetEvent(hErrorEvent);
-      fileStream.Destroy();
-      ReleaseMutex(hMutex);
-      exit;
-    end;
-    ResetEvent(hDataReceivedEvent);
+    waitCount := 0;
+    repeat
+      waitStatus := WaitForSingleObject(hDataReceivedEvent, WAIT_FOR_EVENT_TIMEOUT);
+      
+      if( waitStatus = WAIT_OBJECT_0 )then break;
 
-    progressBarFileTransfer.StepIt();
-    Application.ProcessMessages();
+      if( waitStatus = WAIT_TIMEOUT ) and ( waitCount >= WAIT_TIMES )then
+      begin
+        Log('Unable to send chunk to server. Timed out.');
+        ResetEvent( hNextChunkEvent );
+        SetEvent(hErrorEvent);
+        fileStream.Destroy();
+        ReleaseMutex(hMutex);
+        exit;
+      end;
+      inc( waitCount );
+      if( waitCount > 1 )then
+      begin
+        Log('...waiting server response...');
+        Application.ProcessMessages();
+      end;
+    until( waitCount < WAIT_TIMES );
+
+    ResetEvent(hDataReceivedEvent);
+    ResetEvent(hNextChunkEvent);
+
+    Log('Chunk transfer complete');
+    inc( position );
+
+    UpdateProgress();
   end;
 
   //End of file transfer//
   Log('File transfer successfull');
-  
+
   fileStream.Destroy();
 
   SetEvent( hEndFileEvent );
   ReleaseMutex(hMutex);
 end;
+
+procedure TSharedMemoryClientForm.UpdateProgress();
+begin
+    progressBarFileTransfer.StepIt();
+    Application.ProcessMessages();
+end;
+
 
 procedure TSharedMemoryClientForm.Log( message : string );
 begin
