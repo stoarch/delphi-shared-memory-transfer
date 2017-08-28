@@ -147,7 +147,7 @@ end;
 
 procedure TSharedMemoryClientForm.TransferFile();
   const
-    WAIT_FOR_EVENT_TIMEOUT = 1000;
+    WAIT_FOR_EVENT_TIMEOUT = 5000;
 
   var
     data : pointer;

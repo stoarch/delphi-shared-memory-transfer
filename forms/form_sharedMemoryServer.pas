@@ -181,8 +181,7 @@ procedure TFileListener.Execute;
   const
     WAIT_FOR_EVENT_TIMEOUT = 1000;
   type
-    TFileReceiveState = (frsUnknown, frsNewFileStarted, frsFileReceived);
-    TFileChunkReceiveState = (fcrsUnknown, fcrsChunkReceived);
+    TFileReceiveState = (frsUnknown, frsNewFileStarted, frsFileReceived, frsErrored);
 
   var
     data : pointer;
@@ -191,9 +190,16 @@ procedure TFileListener.Execute;
     position : integer;
 
     fileState : TFileReceiveState;
-    chunkState : TFileChunkReceiveState;
     fileHeader : TFileInfo;
     fileChunk : TFileChunk;
+
+    procedure CleanFile();
+    begin
+      if( assigned(outFile))then
+      begin
+        FreeAndNil(outFile);
+      end;
+    end;
 
     procedure CheckError();
     begin
@@ -257,17 +263,12 @@ procedure TFileListener.Execute;
   {$endif}
 
           //Windows file routines for speed//
-          fh := FileOpen( fileHeader.fileName, fmOpenWrite + fmShareDenyNone );
-          try
-            FileSeek(fh, 0, soFromEnd);
-            bytesWritten := FileWrite(fh, fileChunk.data[0], fileChunk.size);
-            if( bytesWritten <> fileChunk.size)then
-            begin
-              Log(SysErrorMessage(GetLastError()));
-              Log(Format('Unable to write %0:d bytes (%1:d written)', [bytesWritten, fileChunk.size]));
-            end;
-          finally
-            FileClose(fh);
+          bytesWritten := outFile.Write( fileChunk.data[0], fileChunk.size);
+          if( bytesWritten <> fileChunk.size)then
+          begin
+            Log(SysErrorMessage(GetLastError()));
+            Log(Format('Unable to write %0:d bytes (%1:d written)', [bytesWritten, fileChunk.size]));
+            fileState := frsErrored;
           end;
 
           UnmapViewOfFile(data);
@@ -292,7 +293,12 @@ procedure TFileListener.Execute;
 
         data := MapViewOfFile(hSharedMemory, FILE_MAP_READ, 0, 0, FILE_NAME_SIZE);
 
-        if( data = nil )then exit;
+        if( data = nil )then
+        begin
+          fileState := frsErrored;
+          Log('Unable to map view of file to receive file name');
+          exit;
+        end;
 
         fileHeader.fileSize := Integer(data^);//first four bytes of string is size
         fileHeader.nameSize := Integer(Pointer(Integer(data)+4)^);
@@ -307,36 +313,40 @@ procedure TFileListener.Execute;
         Log('File name is: ' + fileHeader.fileName );
         Log('File size is: ' + IntToStr(fileHeader.fileSize));
 
-        fh := FileCreate(fileHeader.fileName);
-        FileClose(fh);
+        CleanFile();
+        outFile := TFileStream.Create(fileHeader.fileName, fmCreate or fmShareDenyWrite );
       end;
     end;
 
 begin
   fileState := frsUnknown;
-  chunkState := fcrsUnknown;
   outFile := nil;
   try
-    while not terminated do
-    begin
-      CheckError();
+    try
+      while not terminated do
+      begin
+        CheckError();
 
-      case fileState of
-        frsUnknown:
-          begin
-            CheckNewFileStart();
-          end;
-        frsNewFileStarted:
-          begin
-            CheckNextFileChunk();
-            CheckEndOfFile();
-          end;
-        frsFileReceived:
-          begin
-            Log('File received');
-            fileState := frsUnknown;
-          end;
+        case fileState of
+          frsUnknown:
+            begin
+              CheckNewFileStart();
+            end;
+          frsNewFileStarted:
+            begin
+              CheckNextFileChunk();
+              CheckEndOfFile();
+            end;
+          frsFileReceived:
+            begin
+              Log('File received');
+              CleanFile();
+              fileState := frsUnknown;
+            end;
+        end;
       end;
+    finally
+      CleanFile();
     end;
   except
     on e:Exception do
