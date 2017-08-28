@@ -195,21 +195,12 @@ procedure TFileListener.Execute;
     fileHeader : TFileInfo;
     fileChunk : TFileChunk;
 
-    procedure CleanFile();
-    begin
-      if(assigned(outFile))then
-      begin
-        FreeAndNil(outFile);
-      end;
-    end;
-
     procedure CheckError();
     begin
       if( WaitForSingleObject( hErrorEvent, WAIT_FOR_EVENT_TIMEOUT ) = WAIT_OBJECT_0 )then
       begin
         ResetEvent(hErrorEvent);
         Log('Client error occured');
-        CleanFile();
         fileState := frsUnknown;
       end
     end;
@@ -230,6 +221,8 @@ procedure TFileListener.Execute;
 {$ENDIF}
       var
         bytesWritten : integer;
+        f : file;
+        fh : Integer;
     begin
       if( WaitForSingleObject(hNextChunkEvent, WAIT_FOR_EVENT_TIMEOUT) = WAIT_OBJECT_0 )then
       begin
@@ -262,17 +255,19 @@ procedure TFileListener.Execute;
           CopyMemory(PChar(debugStr), Pointer(fileChunk.data), 100 );
           Log('Chunk data: ' + debugStr + ' ...' );
   {$endif}
-          outFile := TFileStream.Create(fileHeader.fileName, fmOpenReadWrite or fmShareDenyNone );
+
+          //Windows file routines for speed//
+          fh := FileOpen( fileHeader.fileName, fmOpenWrite + fmShareDenyNone );
           try
-            outFile.Seek(0, soFromEnd);
-            bytesWritten := outFile.Write(fileChunk.data, fileChunk.size);
-            if( bytesWritten <> fileChunk.size )then
+            FileSeek(fh, 0, soFromEnd);
+            bytesWritten := FileWrite(fh, fileChunk.data[0], fileChunk.size);
+            if( bytesWritten <> fileChunk.size)then
             begin
-              Log('Error: unable to write to file' );
-              Log(Format('Bytes written: %0:d',[bytesWritten]));
+              Log(SysErrorMessage(GetLastError()));
+              Log(Format('Unable to write %0:d bytes (%1:d written)', [bytesWritten, fileChunk.size]));
             end;
           finally
-            CleanFile();
+            FileClose(fh);
           end;
 
           UnmapViewOfFile(data);
@@ -285,12 +280,15 @@ procedure TFileListener.Execute;
     end;
 
     procedure CheckNewFileStart();
+      var
+        fh : integer;
     begin
       if( WaitForSingleObject(hNewFileEvent, WAIT_FOR_EVENT_TIMEOUT) = WAIT_OBJECT_0 )then
       begin
         Log('New file received');
         ResetEvent(hNewFileEvent);
         fileState := frsNewFileStarted;
+        position := 0;
 
         data := MapViewOfFile(hSharedMemory, FILE_MAP_READ, 0, 0, FILE_NAME_SIZE);
 
@@ -309,42 +307,36 @@ procedure TFileListener.Execute;
         Log('File name is: ' + fileHeader.fileName );
         Log('File size is: ' + IntToStr(fileHeader.fileSize));
 
-        outFile := TFileStream.Create(fileHeader.fileName, fmCreate );
-        CleanFile();
+        fh := FileCreate(fileHeader.fileName);
+        FileClose(fh);
       end;
     end;
-
 
 begin
   fileState := frsUnknown;
   chunkState := fcrsUnknown;
   outFile := nil;
   try
-    try
-      while not terminated do
-      begin
-        CheckError();
+    while not terminated do
+    begin
+      CheckError();
 
-        case fileState of
-          frsUnknown:
-            begin
-              CheckNewFileStart();
-            end;
-          frsNewFileStarted:
-            begin
-              CheckNextFileChunk();
-              CheckEndOfFile();
-            end;
-          frsFileReceived:
-            begin
-              Log('File received');
-              CleanFile();
-              fileState := frsUnknown;
-            end;
-        end;
+      case fileState of
+        frsUnknown:
+          begin
+            CheckNewFileStart();
+          end;
+        frsNewFileStarted:
+          begin
+            CheckNextFileChunk();
+            CheckEndOfFile();
+          end;
+        frsFileReceived:
+          begin
+            Log('File received');
+            fileState := frsUnknown;
+          end;
       end;
-    finally
-      CleanFile();
     end;
   except
     on e:Exception do
