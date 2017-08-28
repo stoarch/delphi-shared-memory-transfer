@@ -7,6 +7,7 @@ uses
   Dialogs, smHub2_TLB, ComObj, ComCtrls, StdCtrls, tool_events;
 
 type
+  TSetProgressProc = procedure (sender : TObject; max : integer ) of object;
   TProgressProc = procedure (sender : TObject; position : integer ) of object;
   TLogProc = procedure (sender : TObject; message : string ) of object;
 
@@ -14,20 +15,26 @@ type
     private
       FOnLog : TLogProc;
       FOnProgress : TProgressProc;
+      FOnSetProgress : TSetProgressProc;
+
       FMessage : string;
       FPosition : integer;
+      FMaxProgress : integer;
 
       procedure InternalLog;
       procedure InternalShowPosition;
+      procedure InternalSetProgress;
 
       procedure Log(message: string);
       procedure ShowProgress(position : Integer);
+      procedure InitProgress(max : integer);
     protected
       constructor Create(CreateSuspended: boolean);reintroduce;
       procedure Execute();override;
 
       property OnLog : TLogProc read FOnLog write FOnLog;
       property OnProgress : TProgressProc read FOnProgress write FOnProgress;
+      property OnSetProgress : TSetProgressProc read FOnSetProgress write FOnSetProgress;
   end;
 
 type
@@ -42,6 +49,7 @@ type
     FListener : TFileListener;
     procedure HandleProgress(sender: TObject; position: integer);
     procedure HandleLog(sender: TObject; message: string);
+    procedure HandleSetProgress(sender: TObject; max: Integer);
   public
     { Public declarations }
     constructor Create(AOwner: TComponent);override;
@@ -61,8 +69,6 @@ uses
 var
   hSharedMemory : THandle;
   hMutex : THandle;
-
-  listener : TFileListener;
 
   smHub : ISharedMemoryHub2;
   sharedMemoryName : String;
@@ -147,6 +153,7 @@ begin
   FListener := TFileListener.Create(SUSPENDED);
   FListener.OnProgress := HandleProgress;
   FListener.OnLog := HandleLog;
+  FListener.OnSetProgress := HandleSetProgress;
   FListener.Resume();
 end;
 
@@ -170,6 +177,12 @@ begin
   memoLog.Lines.Append(message);
 end;
 
+procedure TSharedMemoryServerForm.HandleSetProgress(sender : TObject; max : Integer );
+begin
+  progressBarFileReceive.Max := max;
+end;
+
+
 { TFileListener }
 
 constructor TFileListener.Create(CreateSuspended: boolean);
@@ -185,7 +198,6 @@ procedure TFileListener.Execute;
 
   var
     data : pointer;
-    size : Integer;
     outFile : TFileStream;
     position : integer;
 
@@ -227,8 +239,6 @@ procedure TFileListener.Execute;
 {$ENDIF}
       var
         bytesWritten : integer;
-        f : file;
-        fh : Integer;
     begin
       if( WaitForSingleObject(hNextChunkEvent, WAIT_FOR_EVENT_TIMEOUT) = WAIT_OBJECT_0 )then
       begin
@@ -281,8 +291,6 @@ procedure TFileListener.Execute;
     end;
 
     procedure CheckNewFileStart();
-      var
-        fh : integer;
     begin
       if( WaitForSingleObject(hNewFileEvent, WAIT_FOR_EVENT_TIMEOUT) = WAIT_OBJECT_0 )then
       begin
@@ -315,6 +323,7 @@ procedure TFileListener.Execute;
 
         CleanFile();
         outFile := TFileStream.Create(fileHeader.fileName, fmCreate or fmShareDenyWrite );
+        InitProgress(fileHeader.fileSize div SHARED_MEMORY_SIZE);
       end;
     end;
 
@@ -356,10 +365,22 @@ begin
   end;
 end;
 
+procedure TFileListener.InitProgress(max: integer);
+begin
+  FMaxProgress := max;
+  Synchronize(InternalSetProgress);
+end;
+
 procedure TFileListener.InternalLog;
 begin
   if Assigned(FOnLog) then
     FOnLog(self, FMessage);
+end;
+
+procedure TFileListener.InternalSetProgress;
+begin
+  if Assigned(FOnSetProgress) then
+    FOnSetProgress(Self, FMaxProgress);
 end;
 
 procedure TFileListener.InternalShowPosition;
