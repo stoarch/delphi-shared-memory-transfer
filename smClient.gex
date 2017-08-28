@@ -1,0 +1,6 @@
+[General]
+Name=smClient
+Project=1
+[Classes]
+Count=1
+Class0="TSharedMemoryClientForm","TForm","form_sharedMemoryClient","9","C:\work.delphi\Test.Transfer\forms\form_sharedMemoryClient.pas"
